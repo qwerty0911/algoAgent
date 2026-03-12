@@ -4,7 +4,6 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from langchain_openai import ChatOpenAI
-from sqlalchemy import create_engine, Column, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
@@ -16,8 +15,6 @@ from uuid import UUID
 
 app = FastAPI()
 
-# 환경 변수에 따라 허용할 도메인을 변경할 수 있게 기획하면 좋습니다.
-# 로컬 테스트시는 localhost, 배포 시에는 실제 도메인 사용
 origins = [
     "http://localhost:5173",        # 로컬 리액트 개발 서버
     "https://your-domain.com",      # 실제 배포될 프론트엔드 도메인(todo:도메인 구입후 추가)
@@ -100,7 +97,6 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
         #title은 첫 채팅 후 content 기반으로 AI가 추천해서 넣도록 변경 예정 
         new_session = ChatSession(session_id=session_id, title="새 채팅",user_id=user_id)
         db.add(new_session)
-        #메시지를 넣기 전에 세션이 존재함을 DB에 알림
         db.flush()
 
     new_message = Message(session_id=session_id, content=content, role="user")
@@ -109,7 +105,7 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
 
     try:
         db.commit()
-        db.refresh(new_message) # 생성된 message_id 등을 다시 읽어옴
+        db.refresh(new_message)
     except Exception as e:
         db.rollback()
         print(f"Error detail: {e}") 
@@ -119,3 +115,20 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
         )
     
     return new_message
+
+
+@app.get("/getsessions", response_model=list[SessionListResponse])
+def get_sessions(user_id:str, db: Session = Depends(get_db)):
+
+    user_uuid = UUID(user_id)
+    db_sessions = db.query(ChatSession).filter(ChatSession.user_id == user_uuid).all()
+
+    return db_sessions;
+
+@app.get("/getMessages", response_model=list[MessageListResponse])
+def get_messages(session_id:str, db: Session = Depends(get_db)):
+
+    session_uuid = UUID(session_id)
+    db_messages = db.query(Message).filter(Message.session_id == session_uuid).all()
+
+    return db_messages;
