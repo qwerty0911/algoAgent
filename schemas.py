@@ -22,7 +22,8 @@ class MessageListResponse(BaseModel):
     session_id : UUID
     content : str
     message_id : int
-    create_at : datetime
+    created_at : datetime
+    role : str
 
     class Config:
         # SQLAlchemy 객체를 Pydantic 모델로 자동 변환하기 위한 설정 (v2는 from_attributes)

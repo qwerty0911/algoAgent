@@ -91,7 +91,7 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
     content = data.content
     
     db_session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
-    
+
     #첫 메시지일경우
     if not db_session:
         #title은 첫 채팅 후 content 기반으로 AI가 추천해서 넣도록 변경 예정 
@@ -99,13 +99,16 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
         db.add(new_session)
         db.flush()
 
-    new_message = Message(session_id=session_id, content=content, role="user")
-    db.add(new_message)
+    request_message = Message(session_id=session_id, content=content, role="user")
     #TO-DO agent의 답장을 만들어야함
+    response_message = Message(session_id=session_id, content="AI의 답변입니다."+content, role="assistant")
+
+    db.add_all([request_message,response_message])
+
 
     try:
         db.commit()
-        db.refresh(new_message)
+        db.refresh(request_message)
     except Exception as e:
         db.rollback()
         print(f"Error detail: {e}") 
@@ -114,7 +117,7 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
             detail=f"Database update failed: {str(e)}"
         )
     
-    return new_message
+    return response_message
 
 
 @app.get("/getsessions", response_model=list[SessionListResponse])
