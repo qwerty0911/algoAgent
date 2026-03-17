@@ -3,3 +3,5 @@ uvicorn
 dotenv
 openai
 langchain_openai
+langchain
+langchain-community

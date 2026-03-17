@@ -1,9 +1,8 @@
 import os
 from fastapi import FastAPI, Depends, HTTPException, status
-from openai import OpenAI
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_openai import ChatOpenAI
+from langchain.tools import tool
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime
@@ -12,6 +11,11 @@ from database import get_db, Base, engine
 from schemas import *
 import models
 from uuid import UUID
+from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.chat_models import init_chat_model
+from tools import *
 
 app = FastAPI()
 
@@ -31,29 +35,30 @@ app.add_middleware(
 
 #model 객체 확인후 db 생성
 models.Base.metadata.create_all(bind=engine)
-# client = OpenAI()
 
 load_dotenv()
-# api_key = os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("OPENAI_API_KEY")
 
-# response = client.responses.create(
-#     model="gpt-5-nano",
-#     input="에이전트란건 뭐야"
-# )
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "당신은 알고리즘 학습을 돕는 유능한 멘토입니다."),
+    ("human", "{input}"),
+    MessagesPlaceholder(variable_name="chat_history"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+])
+
+model = init_chat_model("gpt-5-nano")
+
+tools=[fetch_beakjoon]
+
+agent = create_tool_calling_agent(model, tools, prompt)
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
 
 
 @app.get("/")
 def index():
     return 'hello'
-
-# @app.get("/gpt")
-# def gpt():
-
-#     response = client.responses.create(
-#     model="gpt-5-nano",
-#     input="에이전트란건 뭐야"
-#     )
-#     return response.output_text
 
 @app.post("/login")
 def login_user(data: LoginRequest, db: Session = Depends(get_db)):
@@ -84,31 +89,43 @@ def login_user(data: LoginRequest, db: Session = Depends(get_db)):
     return db_user
 
 @app.post("/sendmessage")
-def login_user(data: SendMessage, db: Session = Depends(get_db)):
+def send_message(data: SendMessage, db: Session = Depends(get_db)):
     
     user_id = UUID(data.user_id)
     session_id = UUID(data.session_id)
     content = data.content
     
+    request_message = Message(session_id=session_id, content=content, role="user")
+    
     db_session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
 
-    #첫 메시지일경우
+    #1. 세션이 없으면 새로 생성 (첫 대화)
+    is_new_session = False
     if not db_session:
-        #title은 첫 채팅 후 content 기반으로 AI가 추천해서 넣도록 변경 예정 
-        new_session = ChatSession(session_id=session_id, title="새 채팅",user_id=user_id)
+        is_new_session = True
+        new_session = ChatSession(session_id=session_id, title="새 대화",user_id=user_id)
         db.add(new_session)
         db.flush()
 
-    request_message = Message(session_id=session_id, content=content, role="user")
-    #TO-DO agent의 답장을 만들어야함
-    response_message = Message(session_id=session_id, content="AI의 답변입니다."+content, role="assistant")
-
+    if is_new_session:
+        pass
+        # LLM을 호출하여 제목 추출
+        # summary_title = quick_title_gen(content)
+        # session_obj = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
+        # session_obj.title = summary_title
+    
+    #config = {"configurable": {"session_id": session_id}}
+    response = agent_executor.invoke(
+        {"input": content,
+         "chat_history": [] 
+        }
+        )
+    response_message = Message(session_id=session_id, content=response['output'], role="assistant")
     db.add_all([request_message,response_message])
-
 
     try:
         db.commit()
-        db.refresh(request_message)
+        db.refresh(response_message)
     except Exception as e:
         db.rollback()
         print(f"Error detail: {e}") 
@@ -119,7 +136,7 @@ def login_user(data: SendMessage, db: Session = Depends(get_db)):
     
     return response_message
 
-
+#이전 채팅의 채팅 세션 load
 @app.get("/getsessions", response_model=list[SessionListResponse])
 def get_sessions(user_id:str, db: Session = Depends(get_db)):
 
@@ -128,6 +145,7 @@ def get_sessions(user_id:str, db: Session = Depends(get_db)):
 
     return db_sessions;
 
+#이전 채팅 메시지 load
 @app.get("/getMessages", response_model=list[MessageListResponse])
 def get_messages(session_id:str, db: Session = Depends(get_db)):
 
