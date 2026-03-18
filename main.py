@@ -39,9 +39,18 @@ models.Base.metadata.create_all(bind=engine)
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 
+system_prompt ="""
+당신은 백준 알고리즘 학습 전문가입니다. 
+사용자의 질문에 답할 때 다음 규칙을 철저히 따르세요:
+
+1. 사용자가 '취업', '취미', '대회' 중 하나의 목표를 언급하면, 
+   반드시 'get_goal_requirements' 툴을 실행하여 공인된 가이드라인 정보를 가져오세요.
+2. 툴에서 가져온 'core_tags' 정보를 바탕으로 사용자의 현재 실력과 비교하여 조언하세요.
+3. 절대 당신의 사전 지식만으로 알고리즘 로드맵을 설명하지 마세요.
+"""
 
 prompt = ChatPromptTemplate.from_messages([
-    ("system", "당신은 알고리즘 학습을 돕는 유능한 멘토입니다."),
+    ("system", system_prompt),
     ("human", "{input}"),
     MessagesPlaceholder(variable_name="chat_history"),
     MessagesPlaceholder(variable_name="agent_scratchpad"),
@@ -49,7 +58,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 model = init_chat_model("gpt-5-nano")
 
-tools=[fetch_beakjoon]
+tools=[fetch_beakjoon, get_goal_requirements]
 
 agent = create_tool_calling_agent(model, tools, prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
