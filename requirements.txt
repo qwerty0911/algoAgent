@@ -1,7 +1,10 @@
 fastapi
+greenlet
 uvicorn
 dotenv
 openai
 langchain_openai
 langchain
 langchain-community
+psycopg2
+motor

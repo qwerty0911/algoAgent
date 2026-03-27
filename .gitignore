@@ -1,3 +1,5 @@
+/node_modules
+
 # 가상환경
 venv/
 .venv/

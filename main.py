@@ -16,8 +16,20 @@ from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.chat_models import init_chat_model
 from tools import *
+from contextlib import asynccontextmanager
+from mongodb import db_manager
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 앱 시작 시 실행
+    db_manager.connect()
+    # app.state에 저장해두면 어디서든 접근 가능 (선택 사항)
+    app.state.db = db_manager.db
+    yield
+    # 앱 종료 시 실행
+    db_manager.close()
+
+app = FastAPI(lifespan=lifespan)
 
 origins = [
     "http://localhost:5173",        # 로컬 리액트 개발 서버
@@ -47,6 +59,7 @@ system_prompt ="""
    반드시 'get_goal_requirements' 툴을 실행하여 공인된 가이드라인 정보를 가져오세요.
 2. 툴에서 가져온 'core_tags' 정보를 바탕으로 사용자의 현재 실력과 비교하여 조언하세요.
 3. 절대 당신의 사전 지식만으로 알고리즘 로드맵을 설명하지 마세요.
+4. 문제를 추천할땐 'recommand_question' 툴을 사용해 문제의 id 난이도 알고리즘 tag를 조회해서 가져오세요.
 """
 
 prompt = ChatPromptTemplate.from_messages([
@@ -58,7 +71,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 model = init_chat_model("gpt-5-nano")
 
-tools=[fetch_beakjoon, get_goal_requirements]
+tools=[fetch_beakjoon, get_goal_requirements, recommand_question, search_problem_from_solvedac]
 
 agent = create_tool_calling_agent(model, tools, prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
@@ -83,7 +96,7 @@ def login_user(data: LoginRequest, db: Session = Depends(get_db)):
 
     #기존 유저일 때  
     else:
-        db_user.last_login = datetime.now()
+        db_user.last_login = datetime.datetime.now()
 
     try:
         db.commit()
@@ -98,7 +111,7 @@ def login_user(data: LoginRequest, db: Session = Depends(get_db)):
     return db_user
 
 @app.post("/sendmessage")
-def send_message(data: SendMessage, db: Session = Depends(get_db)):
+async def send_message(data: SendMessage, db: Session = Depends(get_db)):
     
     user_id = UUID(data.user_id)
     session_id = UUID(data.session_id)
@@ -116,19 +129,31 @@ def send_message(data: SendMessage, db: Session = Depends(get_db)):
         db.add(new_session)
         db.flush()
 
+        #mongodb에 새 세션 추가
+        new_session = StudySession(
+        user_id=user_id,
+        session_id=session_id
+        )
+        session_dict = new_session.model_dump(by_alias=True)
+        collection = db_manager.db.get_collection("algoAgent")
+        await collection.insert_one(session_dict)
+
     if is_new_session:
         pass
-        # LLM을 호출하여 제목 추출
-        # summary_title = quick_title_gen(content)
-        # session_obj = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
-        # session_obj.title = summary_title
+        # LLM을 호출하여 제목 생성(미구현)
     
     #config = {"configurable": {"session_id": session_id}}
-    response = agent_executor.invoke(
-        {"input": content,
-         "chat_history": [] 
+    response = await agent_executor.ainvoke(
+        {
+            "input": content,
+            "chat_history": [],
+            # "session_id": session_id
+        },
+        {"metadata": {
+            "session_id": session_id
+            }
         }
-        )
+    )
     response_message = Message(session_id=session_id, content=response['output'], role="assistant")
     db.add_all([request_message,response_message])
 
@@ -162,3 +187,4 @@ def get_messages(session_id:str, db: Session = Depends(get_db)):
     db_messages = db.query(Message).filter(Message.session_id == session_uuid).all()
 
     return db_messages;
+

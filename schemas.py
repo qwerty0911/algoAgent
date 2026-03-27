@@ -1,7 +1,7 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from dataclasses import dataclass
 
 #로그인할때
@@ -44,3 +44,20 @@ class Context:
 class BackjoonId(BaseModel):
     """사용자의 백준 아이디"""
     backjoon_id: Optional[str] = Field(description="사용자의 백준 아이디")
+
+# 1. 개별 문제 스키마
+class Problem(BaseModel):
+    problem_id: int        # 문제 번호
+    title: str             # 제목
+    level: int             # 난이도 (solved.ac 기준 등)
+    tags: List[str] = []   # 태그 리스트
+
+# 2. 세션 스키마
+class StudySession(BaseModel):
+    session_id: UUID = Field(alias="_id")
+    user_id: UUID
+    problems: List[Problem] = [] 
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    model_config = ConfigDict(populate_by_name=True)
