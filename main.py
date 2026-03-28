@@ -18,6 +18,7 @@ from langchain.chat_models import init_chat_model
 from tools import *
 from contextlib import asynccontextmanager
 from mongodb import db_manager
+from agent_context import agent_session_id_ctx
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -142,18 +143,15 @@ async def send_message(data: SendMessage, db: Session = Depends(get_db)):
         pass
         # LLM을 호출하여 제목 생성(미구현)
     
-    #config = {"configurable": {"session_id": session_id}}
-    response = await agent_executor.ainvoke(
-        {
-            "input": content,
-            "chat_history": [],
-            # "session_id": session_id
-        },
-        {"metadata": {
-            "session_id": session_id
-            }
-        }
-    )
+    # AgentExecutor는 tool.arun에 RunnableConfig를 넘기지 않음 → ContextVar로 session_id 전달
+    token = agent_session_id_ctx.set(session_id)
+    try:
+        response = await agent_executor.ainvoke(
+            {"input": content, "chat_history": []},
+            {"metadata": {"session_id": session_id}},
+        )
+    finally:
+        agent_session_id_ctx.reset(token)
     response_message = Message(session_id=session_id, content=response['output'], role="assistant")
     db.add_all([request_message,response_message])
 
@@ -188,3 +186,12 @@ def get_messages(session_id:str, db: Session = Depends(get_db)):
 
     return db_messages;
 
+# 추천 문제(로드맵) load — MongoDB 문서의 problems 배열
+@app.get("/getLoadmap", response_model=list[Problem])
+async def get_loadmap(session_id: str):
+    session_uuid = UUID(session_id)
+    collection = db_manager.db.get_collection("algoAgent")
+    doc = await collection.find_one({"_id": session_uuid})
+    if not doc:
+        return []
+    return doc.get("problems", [])

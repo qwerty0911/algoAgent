@@ -1,11 +1,11 @@
 import datetime
 
 from langchain.tools import tool
-from langchain_core.runnables import RunnableConfig
-from typing import List,Any,Dict,Literal
+from typing import List, Any, Dict, Literal
 import requests
 from schemas import Problem
 from mongodb import db_manager
+from agent_context import agent_session_id_ctx
 import httpx
 
 # 1. 목표별 요구사항 데이터 (DB나 JSON 파일로 관리해도 좋습니다)
@@ -70,13 +70,14 @@ async def fetch_beakjoon(beakjoon_id: str)  -> Dict[str, int]:
     return tag_rating_dict
 
 @tool
-async def recommand_question(problem_id,config: RunnableConfig)->str:
+async def recommand_question(problem_id) -> str:
     """
     agent에 의해 추천된 문제번호의 정보를 가져와 로드맵에 추가합니다.
     (LLM은 session_id를 신경 쓰지 않아도 됩니다.)
     """
-
-    print(f"DEBUG: config is {config}")
+    session_id = agent_session_id_ctx.get()
+    if session_id is None:
+        return "세션 정보가 없어 로드맵에 저장하지 못했습니다. (내부 설정 오류)"
 
     url = f"https://solved.ac/api/v3/problem/show"
     params = {"problemId":problem_id}
@@ -99,8 +100,6 @@ async def recommand_question(problem_id,config: RunnableConfig)->str:
     )
 
     problem_dict = problem.model_dump()
-    metadata = config.get("metadata", {})
-    session_id = metadata.get("session_id")
     collection = db_manager.db.get_collection("algoAgent")
     await collection.update_one(
         {"_id": session_id},  # 세션 ID(UUID)로 문서 찾기
