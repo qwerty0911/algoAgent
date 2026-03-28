@@ -19,6 +19,7 @@ from tools import *
 from contextlib import asynccontextmanager
 from mongodb import db_manager
 from agent_context import agent_session_id_ctx
+from langchain_core.output_parsers import StrOutputParser
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -52,6 +53,8 @@ models.Base.metadata.create_all(bind=engine)
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 
+
+## Agent 프롬프트
 system_prompt ="""
 당신은 백준 알고리즘 학습 전문가입니다. 
 사용자의 질문에 답할 때 다음 규칙을 철저히 따르세요:
@@ -77,7 +80,18 @@ tools=[fetch_beakjoon, get_goal_requirements, recommand_question, search_problem
 agent = create_tool_calling_agent(model, tools, prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
-
+## 채팅 세션 제목 생성
+title_prompt = ChatPromptTemplate.from_messages([
+    ("system", """당신은 요약 전문가입니다. 사용자의 질문을 분석하여 5단어 이내의 제목을 생성하세요.
+    
+    [주의사항]
+    - 반드시 제목만 출력하세요.
+    - '제목:', '추천:', '어떠신가요?' 같은 부가 설명이나 인사는 절대로 금지합니다.
+    - 답변에 제목 외의 다른 문자가 포함되면 시스템 에러가 발생합니다."""),
+    ("human", "{input}"),
+])
+title_model = init_chat_model("gpt-5-nano")
+title_chain = title_prompt | title_model | StrOutputParser()
 
 @app.get("/")
 def index():
@@ -123,12 +137,14 @@ async def send_message(data: SendMessage, db: Session = Depends(get_db)):
     db_session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
 
     #1. 세션이 없으면 새로 생성 (첫 대화)
-    is_new_session = False
     if not db_session:
-        is_new_session = True
         new_session = ChatSession(session_id=session_id, title="새 대화",user_id=user_id)
         db.add(new_session)
         db.flush()
+
+        #제목 생성
+        new_title = await title_chain.ainvoke({"input": content})
+        new_session.title = new_title.strip()[:50]
 
         #mongodb에 새 세션 추가
         new_session = StudySession(
@@ -139,10 +155,6 @@ async def send_message(data: SendMessage, db: Session = Depends(get_db)):
         collection = db_manager.db.get_collection("algoAgent")
         await collection.insert_one(session_dict)
 
-    if is_new_session:
-        pass
-        # LLM을 호출하여 제목 생성(미구현)
-    
     # AgentExecutor는 tool.arun에 RunnableConfig를 넘기지 않음 → ContextVar로 session_id 전달
     token = agent_session_id_ctx.set(session_id)
     try:
