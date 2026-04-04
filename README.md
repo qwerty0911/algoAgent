@@ -129,13 +129,21 @@ npm run dev   # 포트 5173
 
 ```
 algoAgent/
-├── main.py           # FastAPI 앱, API 엔드포인트, Agent 설정
-├── tools.py          # LangChain Tool 4종 정의
-├── agent_context.py  # ContextVar (Tool에 session_id 전달)
-├── models.py         # SQLAlchemy ORM 모델 (User, ChatSession, Message)
-├── schemas.py        # Pydantic 스키마, MongoDB StudySession 문서 구조
-├── database.py       # PostgreSQL 세션 설정
-├── mongodb.py        # MongoDB 연결 및 컬렉션 접근
-├── hook.py           # LangChain callback hook
+├── main.py               # FastAPI 앱 설정, CORS, 라우터 등록
+├── agent.py              # LangChain Agent + 세션 제목 생성 chain
+├── tools.py              # LangChain Tool 4종 정의
+├── models.py             # SQLAlchemy ORM 모델 (User, ChatSession, Message)
+├── schemas.py            # Pydantic 스키마, MongoDB StudySession 문서 구조
+├── agent_context.py      # ContextVar (Tool에 session_id 전달)
+├── hook.py               # LangChain callback hook
+├── db/
+│   ├── __init__.py       # engine, get_db, db_manager re-export
+│   ├── postgres.py       # PostgreSQL 연결 및 세션 설정
+│   └── mongo.py          # MongoDB 싱글톤 연결 관리
+├── routers/
+│   ├── __init__.py
+│   ├── auth.py           # POST /login
+│   ├── chat.py           # POST /sendmessage, GET /getsessions, GET /getMessages
+│   └── loadmap.py        # GET /getLoadmap
 └── requirements.txt
 ```

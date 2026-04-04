@@ -12,7 +12,6 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Dependency: API에서 사용할 DB 세션 생성 함수
 def get_db():
     db = SessionLocal()
     try:

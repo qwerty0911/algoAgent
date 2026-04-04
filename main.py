@@ -1,42 +1,23 @@
-import os
-from fastapi import FastAPI, Depends, HTTPException, status
-from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
-from langchain.tools import tool
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime
-from models import *
-from database import get_db, Base, engine
-from schemas import *
-import models
-from uuid import UUID
-from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.chat_models import init_chat_model
-from tools import *
 from contextlib import asynccontextmanager
-from mongodb import db_manager
-from agent_context import agent_session_id_ctx
-from langchain_core.output_parsers import StrOutputParser
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import models
+from db import engine, db_manager
+from routers import auth, chat, loadmap
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 앱 시작 시 실행
     db_manager.connect()
-    # app.state에 저장해두면 어디서든 접근 가능 (선택 사항)
     app.state.db = db_manager.db
     yield
-    # 앱 종료 시 실행
     db_manager.close()
 
 app = FastAPI(lifespan=lifespan)
 
 origins = [
-    "http://localhost:5173",        # 로컬 리액트 개발 서버
-    "https://your-domain.com",      # 실제 배포될 프론트엔드 도메인(todo:도메인 구입후 추가)
-    "https://www.your-domain.com",  
+    "http://localhost:5173",
+    "https://your-domain.com",       # todo: 도메인 구입 후 추가
+    "https://www.your-domain.com",
 ]
 
 app.add_middleware(
@@ -47,163 +28,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#model 객체 확인후 db 생성
 models.Base.metadata.create_all(bind=engine)
 
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-
-
-## Agent 프롬프트
-system_prompt ="""
-당신은 백준 알고리즘 학습 전문가입니다. 
-사용자의 질문에 답할 때 다음 규칙을 철저히 따르세요:
-
-1. 사용자가 '취업', '취미', '대회' 중 하나의 목표를 언급하면, 
-   반드시 'get_goal_requirements' 툴을 실행하여 공인된 가이드라인 정보를 가져오세요.
-2. 툴에서 가져온 'core_tags' 정보를 바탕으로 사용자의 현재 실력과 비교하여 조언하세요.
-3. 절대 당신의 사전 지식만으로 알고리즘 로드맵을 설명하지 마세요.
-4. 문제를 추천할땐 'recommand_question' 툴을 사용해 문제의 id 난이도 알고리즘 tag를 조회해서 가져오세요.
-"""
-
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_prompt),
-    ("human", "{input}"),
-    MessagesPlaceholder(variable_name="chat_history"),
-    MessagesPlaceholder(variable_name="agent_scratchpad"),
-])
-
-model = init_chat_model("gpt-5-nano")
-
-tools=[fetch_beakjoon, get_goal_requirements, recommand_question, search_problem_from_solvedac]
-
-agent = create_tool_calling_agent(model, tools, prompt)
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
-
-## 채팅 세션 제목 생성
-title_prompt = ChatPromptTemplate.from_messages([
-    ("system", """당신은 요약 전문가입니다. 사용자의 질문을 분석하여 5단어 이내의 제목을 생성하세요.
-    
-    [주의사항]
-    - 반드시 제목만 출력하세요.
-    - '제목:', '추천:', '어떠신가요?' 같은 부가 설명이나 인사는 절대로 금지합니다.
-    - 답변에 제목 외의 다른 문자가 포함되면 시스템 에러가 발생합니다."""),
-    ("human", "{input}"),
-])
-title_model = init_chat_model("gpt-5-nano")
-title_chain = title_prompt | title_model | StrOutputParser()
+app.include_router(auth.router)
+app.include_router(chat.router)
+app.include_router(loadmap.router)
 
 @app.get("/")
 def index():
-    return 'hello'
-
-@app.post("/login")
-def login_user(data: LoginRequest, db: Session = Depends(get_db)):
-
-    user_nickname = data.nickname
-
-    db_user = db.query(User).filter(User.nickname == user_nickname).first()
-    
-    #새 유저
-    if not db_user:
-        db_user = User(nickname=user_nickname)
-        db.add(db_user)
-
-    #기존 유저일 때  
-    else:
-        db_user.last_login = datetime.datetime.now()
-
-    try:
-        db.commit()
-        db.refresh(db_user)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database update failed"
-        )
-    
-    return db_user
-
-@app.post("/sendmessage")
-async def send_message(data: SendMessage, db: Session = Depends(get_db)):
-    
-    user_id = UUID(data.user_id)
-    session_id = UUID(data.session_id)
-    content = data.content
-    
-    request_message = Message(session_id=session_id, content=content, role="user")
-    
-    db_session = db.query(ChatSession).filter(ChatSession.session_id == session_id).first()
-
-    #1. 세션이 없으면 새로 생성 (첫 대화)
-    if not db_session:
-        new_session = ChatSession(session_id=session_id, title="새 대화",user_id=user_id)
-        db.add(new_session)
-        db.flush()
-
-        #제목 생성
-        new_title = await title_chain.ainvoke({"input": content})
-        new_session.title = new_title.strip()[:50]
-
-        #mongodb에 새 세션 추가
-        new_session = StudySession(
-        user_id=user_id,
-        session_id=session_id
-        )
-        session_dict = new_session.model_dump(by_alias=True)
-        collection = db_manager.db.get_collection("algoAgent")
-        await collection.insert_one(session_dict)
-
-    # AgentExecutor는 tool.arun에 RunnableConfig를 넘기지 않음 → ContextVar로 session_id 전달
-    token = agent_session_id_ctx.set(session_id)
-    try:
-        response = await agent_executor.ainvoke(
-            {"input": content, "chat_history": []},
-            {"metadata": {"session_id": session_id}},
-        )
-    finally:
-        agent_session_id_ctx.reset(token)
-    response_message = Message(session_id=session_id, content=response['output'], role="assistant")
-    db.add_all([request_message,response_message])
-
-    try:
-        db.commit()
-        db.refresh(response_message)
-    except Exception as e:
-        db.rollback()
-        print(f"Error detail: {e}") 
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database update failed: {str(e)}"
-        )
-    
-    return response_message
-
-#이전 채팅의 채팅 세션 load
-@app.get("/getsessions", response_model=list[SessionListResponse])
-def get_sessions(user_id:str, db: Session = Depends(get_db)):
-
-    user_uuid = UUID(user_id)
-    db_sessions = db.query(ChatSession).filter(ChatSession.user_id == user_uuid).all()
-
-    return db_sessions;
-
-#이전 채팅 메시지 load
-@app.get("/getMessages", response_model=list[MessageListResponse])
-def get_messages(session_id:str, db: Session = Depends(get_db)):
-
-    session_uuid = UUID(session_id)
-    db_messages = db.query(Message).filter(Message.session_id == session_uuid).all()
-
-    return db_messages;
-
-# 추천 문제(로드맵) load — MongoDB 문서의 problems 배열
-@app.get("/getLoadmap", response_model=list[Problem])
-async def get_loadmap(session_id: str):
-    session_uuid = UUID(session_id)
-    collection = db_manager.db.get_collection("algoAgent")
-    doc = await collection.find_one({"_id": session_uuid})
-    if not doc:
-        return []
-    return doc.get("problems", [])
+    return "hello"

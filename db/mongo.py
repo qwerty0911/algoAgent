@@ -1,7 +1,5 @@
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
-
-MONGO_ACCESS_URL = os.getenv("MONGODB_ACCESS_URL")
+from motor.motor_asyncio import AsyncIOMotorClient
 
 class MongoDB:
     def __init__(self):
@@ -9,7 +7,6 @@ class MongoDB:
         self.db = None
 
     def connect(self):
-        # uuidRepresentation 설정을 여기서 한 번에 관리
         self.client = AsyncIOMotorClient(
             os.getenv("MONGODB_ACCESS_URL"),
             uuidRepresentation="standard"
@@ -22,5 +19,4 @@ class MongoDB:
             self.client.close()
             print("❌ MongoDB Disconnected")
 
-# 싱글톤 객체 생성
 db_manager = MongoDB()

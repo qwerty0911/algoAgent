@@ -4,7 +4,7 @@ from langchain.tools import tool
 from typing import List, Any, Dict, Literal
 import requests
 from schemas import Problem
-from mongodb import db_manager
+from db import db_manager
 from agent_context import agent_session_id_ctx
 import httpx
 
